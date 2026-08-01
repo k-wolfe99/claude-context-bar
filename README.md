@@ -60,7 +60,27 @@ Prices come from the model in the payload:
 | Sonnet 4.6 / 4.5 | 3.00 | 0.30 | 3.75 |
 | Haiku 4.5 | 1.00 | 0.10 | 1.25 |
 
-An unrecognized model still gets an expiry time, just without prices. If you cache with `{"ttl": "1h"}`, change `TTL_SECONDS` at the top of the script.
+An unrecognized model still gets an expiry time, just without prices.
+
+## Configuration
+
+Tunables are read from the environment, not edited into the script — so updating, which copies the script over the top of itself, can't silently clobber them.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CCBAR_TTL_SECONDS` | `300` | Prompt cache TTL. Set to `3600` if you cache with `{"ttl": "1h"}`. |
+| `CCBAR_BAR_WIDTH` | `24` | Progress bar width in cells. |
+
+Set them inline in `settings.json`:
+
+```json
+"statusLine": {
+  "type": "command",
+  "command": "CCBAR_TTL_SECONDS=3600 python3 /YOUR_HOME/.claude/claude-context-bar.py"
+}
+```
+
+Anything unparseable or out of range quietly falls back to the default — a status line should never crash or print a diagnostic into your bar.
 
 ## Requirements
 
@@ -77,6 +97,18 @@ chmod +x install.sh
 ```
 
 Then restart Claude Code.
+
+## Updating
+
+```sh
+cd claude-context-bar && git pull && ./install.sh
+```
+
+Safe to re-run. If `settings.json` already points at the installed script the installer leaves it completely alone, and **no restart is needed** — Claude Code re-runs the status line command on every repaint, so the new version appears immediately.
+
+If your `statusLine` points somewhere else (a renamed script, or a wrapper of your own), the installer says so and changes nothing rather than hijacking it. Pass `--force` to repoint it.
+
+Exit codes: `0` installed or updated, `2` couldn't read or write `settings.json` (the script itself is still installed), `3` left an existing `statusLine` alone.
 
 ## Manual installation
 

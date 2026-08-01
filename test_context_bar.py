@@ -16,7 +16,7 @@ ANSI = re.compile(r"\033\[[0-9;]*m")
 TTL = 300
 
 
-def run(payload):
+def run(payload, env=None):
     """Return (plain_text, raw_output) for a payload."""
     proc = subprocess.run(
         [sys.executable, SCRIPT],
@@ -24,6 +24,7 @@ def run(payload):
         capture_output=True,
         text=True,
         check=True,
+        env={**os.environ, **(env or {})},
     )
     return ANSI.sub("", proc.stdout), proc.stdout
 
@@ -225,6 +226,49 @@ class TestDegradation(unittest.TestCase):
                            "transcript_path": path})
         self.assertEqual(text, "Opus 5 | Context: no data yet")
         self.assertNotIn("⏱", text)
+
+
+class TestConfiguration(unittest.TestCase):
+    """Tunables come from the environment so that reinstalling — which copies
+    the script over the top of itself — cannot silently clobber them."""
+
+    def test_ttl_override_moves_the_expiry(self):
+        # A 1h cache TTL: a request at 1:20pm holds until 2:20pm.
+        with Transcript(at=local_epoch(2026, 8, 1, 13, 20)) as path:
+            text, _ = run(payload(transcript_path=path),
+                          env={"CCBAR_TTL_SECONDS": "3600"})
+        self.assertIn("⏱ til 2:20pm", text)
+
+    def test_bar_width_override(self):
+        with Transcript(age=0) as path:
+            text, _ = run(payload(transcript_path=path, used_percentage=50.0),
+                          env={"CCBAR_BAR_WIDTH": "10"})
+        bar = re.search(r"\[([█░]+)\]", text).group(1)
+        self.assertEqual(len(bar), 10)
+        self.assertEqual(bar.count("█"), 5)
+
+    def test_unset_uses_defaults(self):
+        with Transcript(at=local_epoch(2026, 8, 1, 13, 20)) as path:
+            text, _ = run(payload(transcript_path=path))
+        self.assertIn("⏱ til 1:25pm", text)
+        self.assertEqual(len(re.search(r"\[([█░]+)\]", text).group(1)), 24)
+
+    def test_garbage_falls_back_silently(self):
+        """A status line must not crash or print a diagnostic into the bar."""
+        for bad in ("", "abc", "5.5", "0", "-300"):
+            with self.subTest(value=bad):
+                with Transcript(at=local_epoch(2026, 8, 1, 13, 20)) as path:
+                    text, _ = run(payload(transcript_path=path),
+                                  env={"CCBAR_TTL_SECONDS": bad})
+                self.assertIn("⏱ til 1:25pm", text)
+
+    def test_garbage_bar_width_falls_back(self):
+        for bad in ("abc", "0", "-10"):
+            with self.subTest(value=bad):
+                with Transcript(age=0) as path:
+                    text, _ = run(payload(transcript_path=path),
+                                  env={"CCBAR_BAR_WIDTH": bad})
+                self.assertEqual(len(re.search(r"\[([█░]+)\]", text).group(1)), 24)
 
 
 class TestBar(unittest.TestCase):

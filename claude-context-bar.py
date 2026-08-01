@@ -22,10 +22,28 @@ input_tokens = (
     (usage.get("cache_creation_input_tokens") or 0)
 ) or None
 
-BAR_WIDTH = 24
+def env_int(name, default, minimum=1):
+    """Read a positive int from the environment, falling back on anything odd.
 
-# Prompt cache TTL. Bump to 3600 if you cache with {"ttl": "1h"}.
-TTL_SECONDS = 300
+    Tunables live in the environment rather than in this file so that
+    reinstalling over the top of it cannot silently clobber them. A status
+    line must never crash or print a diagnostic into the bar, so an
+    unparseable or out-of-range value quietly takes the default.
+    """
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value >= minimum else default
+
+
+BAR_WIDTH = env_int("CCBAR_BAR_WIDTH", 24)
+
+# Prompt cache TTL. Set CCBAR_TTL_SECONDS=3600 if you cache with {"ttl": "1h"}.
+TTL_SECONDS = env_int("CCBAR_TTL_SECONDS", 300)
 
 # Cache reads bill at 0.1x the input rate; 5-minute cache writes at 1.25x.
 CACHE_READ_MULT = 0.1
