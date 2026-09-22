@@ -26,6 +26,7 @@ jobs:
         run: |
           python test_check_pricing.py
           python test_context_bar.py
+          python test_agent_rows.py
 
       - name: Compare against the live page
         id: check

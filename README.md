@@ -19,6 +19,16 @@ The bar transitions through 8 color stops as your context fills up:
 | 75–87%  | Orange-red    |
 | 87–100% | Red           |
 
+## Subagent rows
+
+The main status line always describes the main session, even while you view a subagent. So `claude-agent-rows.py` adds each running subagent's model to its row in the agent panel, beside the timer and token count:
+
+```
+○ general-purpose  Committing porSpan clamp fix             Opus 5.5 · 2m 7s · ↓ 110.9k tokens
+```
+
+It is wired up as `subagentStatusLine`. The name comes from the `.meta.json` file Claude Code writes beside each subagent transcript. Finished agents, and any row the script can't read, keep Claude Code's default rendering.
+
 ## Cache expiry
 
 Anthropic's prompt cache has a 5-minute TTL. Send your next message inside that window and the conversation is billed at the cheap cache-read rate (0.1× input on most models); let it lapse and the cache must be written again at 1.25× input — a **12.5× difference** on the same tokens, and 25–50× on Opus 5.5 and Fable 5.1, whose cache reads are cheaper still.
@@ -122,17 +132,21 @@ Safe to re-run. If `settings.json` already points at the installed script the in
 
 If your `statusLine` points somewhere else (a renamed script, or a wrapper of your own), the installer says so and changes nothing rather than hijacking it. Pass `--force` to repoint it.
 
-Exit codes: `0` installed or updated, `2` couldn't read or write `settings.json` (the script itself is still installed), `3` left an existing `statusLine` alone.
+Exit codes: `0` installed or updated, `2` couldn't read or write `settings.json` (the script itself is still installed), `3` left an existing `statusLine` or `subagentStatusLine` alone.
 
 ## Manual installation
 
-1. Copy `claude-context-bar.py` to `~/.claude/`
+1. Copy `claude-context-bar.py` and `claude-agent-rows.py` to `~/.claude/`
 2. Add to `~/.claude/settings.json`:
 
 ```json
 "statusLine": {
   "type": "command",
   "command": "python3 /YOUR_HOME/.claude/claude-context-bar.py"
+},
+"subagentStatusLine": {
+  "type": "command",
+  "command": "python3 /YOUR_HOME/.claude/claude-agent-rows.py"
 }
 ```
 
@@ -143,6 +157,7 @@ Exit codes: `0` installed or updated, `2` couldn't read or write `settings.json`
 ```sh
 python3 test_context_bar.py
 python3 test_check_pricing.py
+python3 test_agent_rows.py
 ```
 
 Stdlib only — pipes synthetic payloads through the script and pins the cache clock by setting the mtime of a temporary transcript file. Times are asserted against locally-constructed epochs, so the suite is timezone-proof.
