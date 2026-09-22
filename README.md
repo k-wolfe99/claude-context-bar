@@ -21,7 +21,7 @@ The bar transitions through 8 color stops as your context fills up:
 
 ## Cache expiry
 
-Anthropic's prompt cache has a 5-minute TTL. Send your next message inside that window and the conversation is billed at the cheap cache-read rate (0.1× input); let it lapse and the cache must be written again at 1.25× input — a **12.5× difference** on the same tokens.
+Anthropic's prompt cache has a 5-minute TTL. Send your next message inside that window and the conversation is billed at the cheap cache-read rate (0.1× input on most models); let it lapse and the cache must be written again at 1.25× input — a **12.5× difference** on the same tokens, and 25–50× on Opus 5.5 and Fable 5.1, whose cache reads are cheaper still.
 
 The `⏱` segment shows the wall-clock time your cache lapses, followed by both prices: green is what the next request costs if you beat that time, red is what it costs if you don't.
 
@@ -50,17 +50,31 @@ A real ticking countdown is possible, but only outside Claude Code — a daemon 
 - **The whole context is treated as cacheable.** Only the prefix up to the last cache breakpoint is actually written, so the write figure is a slight over-estimate.
 - **Fast mode isn't priced.** The status line payload doesn't expose it, so Opus 5 fast mode shows the standard rate.
 
-Prices come from the model in the payload:
+Prices come from the model in the payload, per the [Anthropic pricing page](https://platform.claude.com/docs/en/about-claude/pricing):
 
-| Model | Input $/MTok | Cache read (0.1×) | Cache write (1.25×) |
-|---|---|---|---|
-| Fable 5 / Mythos 5 | 10.00 | 1.00 | 12.50 |
-| Opus 5 / 4.8 / 4.7 / 4.6 / 4.5 | 5.00 | 0.50 | 6.25 |
-| Sonnet 5 | 3.00 (2.00 intro through 2026-08-31) | 0.30 (0.20) | 3.75 (2.50) |
-| Sonnet 4.6 / 4.5 | 3.00 | 0.30 | 3.75 |
-| Haiku 4.5 | 1.00 | 0.10 | 1.25 |
+| Model | Input $/MTok | Cache read | Cache write, 5m (1.25×) | Cache write, 1h (2×) |
+|---|---|---|---|---|
+| Fable 5.1 / Mythos 5.1 | 10.00 | 0.25 (0.025×) | 12.50 | 20.00 |
+| Fable 5 / Mythos 5 | 10.00 | 1.00 (0.1×) | 12.50 | 20.00 |
+| Opus 5.5 | 4.00 | 0.20 (0.05×) | 5.00 | 8.00 |
+| Opus 5 / 4.8 / 4.7 / 4.6 / 4.5 | 5.00 | 0.50 (0.1×) | 6.25 | 10.00 |
+| Sonnet 5 | 2.00 | 0.20 (0.1×) | 2.50 | 4.00 |
+| Sonnet 4.6 / 4.5 | 3.00 | 0.30 (0.1×) | 3.75 | 6.00 |
+| Haiku 4.5 | 1.00 | 0.10 (0.1×) | 1.25 | 2.00 |
+
+The write column follows `CCBAR_TTL_SECONDS`: 1.25× at the default 5-minute TTL, 2× when it is set above 300.
 
 An unrecognized model still gets an expiry time, just without prices.
+
+### Keeping prices current
+
+`check_pricing.py` compares `PRICES` in the script against the live pricing page and lists every figure that differs, including any current model the script has no entry for:
+
+```sh
+python3 check_pricing.py
+```
+
+It exits 0 when in sync, 1 on drift, and 2 if the page can't be fetched or its layout isn't recognised. A weekly GitHub Actions job (`.github/workflows/pricing-check.yml`) runs it and opens an issue labelled `pricing-drift` when prices change, then closes it once a later run is clean. It only reports; updating the table stays a manual edit.
 
 ## Configuration
 
@@ -68,7 +82,7 @@ Tunables are read from the environment, not edited into the script — so updati
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `CCBAR_TTL_SECONDS` | `300` | Prompt cache TTL. Set to `3600` if you cache with `{"ttl": "1h"}`. |
+| `CCBAR_TTL_SECONDS` | `300` | Prompt cache TTL. Set to `3600` if you cache with `{"ttl": "1h"}`; this also switches the write price to the 1-hour rate (2×). |
 | `CCBAR_BAR_WIDTH` | `24` | Progress bar width in cells. |
 
 Set them inline in `settings.json`:
@@ -128,6 +142,7 @@ Exit codes: `0` installed or updated, `2` couldn't read or write `settings.json`
 
 ```sh
 python3 test_context_bar.py
+python3 test_check_pricing.py
 ```
 
 Stdlib only — pipes synthetic payloads through the script and pins the cache clock by setting the mtime of a temporary transcript file. Times are asserted against locally-constructed epochs, so the suite is timezone-proof.

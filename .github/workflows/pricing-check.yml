@@ -1,0 +1,70 @@
+# Weekly check of the prices in claude-context-bar.py against Anthropic's live
+# pricing page. Drift opens (or comments on) one issue labelled pricing-drift;
+# a later clean run closes it. The check never edits code — a person does.
+name: Pricing check
+
+on:
+  schedule:
+    - cron: "17 14 * * 1"  # Mondays 14:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Unit tests
+        run: |
+          python test_check_pricing.py
+          python test_context_bar.py
+
+      - name: Compare against the live page
+        id: check
+        run: |
+          set +e
+          python check_pricing.py > report.md 2> error.txt
+          echo "status=$?" >> "$GITHUB_OUTPUT"
+          cat report.md error.txt
+
+      - name: Open or update the drift issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATUS: ${{ steps.check.outputs.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create pricing-drift --color d93f0b \
+            --description "Prices in the script differ from the pricing page" 2>/dev/null || true
+          open=$(gh issue list --label pricing-drift --state open --json number --jq '.[0].number // empty')
+
+          case "$STATUS" in
+            0)
+              if [ -n "$open" ]; then
+                gh issue close "$open" --comment "Prices are back in sync as of $RUN_URL."
+              fi
+              ;;
+            1)
+              { cat report.md; echo; echo "Update \`PRICES\` in claude-context-bar.py and the README table, then re-run this workflow to confirm. Run: $RUN_URL"; } > body.md
+              if [ -n "$open" ]; then
+                gh issue comment "$open" --body-file body.md
+              else
+                gh issue create --label pricing-drift --title "Pricing drift detected" --body-file body.md
+              fi
+              ;;
+            *)
+              { echo "The pricing check could not compare prices — the page may have changed layout or been unreachable."; echo; echo '```'; cat error.txt; echo '```'; echo; echo "Run: $RUN_URL"; } > body.md
+              if [ -n "$open" ]; then
+                gh issue comment "$open" --body-file body.md
+              else
+                gh issue create --label pricing-drift --title "Pricing check failed" --body-file body.md
+              fi
+              ;;
+          esac

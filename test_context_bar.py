@@ -8,7 +8,6 @@ the cache clock via the mtime of a temporary transcript file.
     python3 test_context_bar.py
 """
 import json, os, re, subprocess, sys, tempfile, time, unittest
-from datetime import date
 
 SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "claude-context-bar.py")
 
@@ -153,12 +152,43 @@ class TestPricing(unittest.TestCase):
             ["$0.013", "$0.168"],
         )
 
-    def test_sonnet_5_intro_pricing(self):
-        intro = date.today() <= date(2026, 8, 31)
+    def test_sonnet_5(self):
+        # The $2 launch price became permanent; the $3 step-up never happened.
         self.assertEqual(
             self._prices(model_id="claude-sonnet-5", display_name="Sonnet 5"),
-            ["$0.009", "$0.112"] if intro else ["$0.013", "$0.168"],
+            ["$0.009", "$0.112"],
         )
+
+    def test_opus_5_5(self):
+        # $4/MTok input, and cache reads at 0.05x rather than 0.1x.
+        self.assertEqual(
+            self._prices(model_id="claude-opus-5-5", display_name="Opus 5.5"),
+            ["$0.009", "$0.224"],
+        )
+
+    def test_opus_5_5_1m_context_variant(self):
+        self.assertEqual(
+            self._prices(model_id="claude-opus-5-5[1m]",
+                         display_name="Opus 5.5 (1M context)"),
+            ["$0.009", "$0.224"],
+        )
+
+    def test_fable_5_1(self):
+        # Same $10 input as Fable 5, but cache reads at 0.025x.
+        self.assertEqual(
+            self._prices(model_id="claude-fable-5-1", display_name="Fable 5.1"),
+            ["$0.011", "$0.560"],
+        )
+
+    def test_mythos_5_1(self):
+        self.assertEqual(
+            self._prices(model_id="claude-mythos-5-1", display_name="Mythos 5.1"),
+            ["$0.011", "$0.560"],
+        )
+
+    def test_opus_5_keeps_standard_read_rate(self):
+        """Opus 5.5 must not leak its rates onto Opus 5."""
+        self.assertEqual(self._prices(), ["$0.022", "$0.280"])
 
     def test_write_is_12_5x_the_read(self):
         # 800k tokens on Opus 5 divides cleanly: $0.400 read, $5.000 write.
@@ -238,6 +268,13 @@ class TestConfiguration(unittest.TestCase):
             text, _ = run(payload(transcript_path=path),
                           env={"CCBAR_TTL_SECONDS": "3600"})
         self.assertIn("⏱ til 2:20pm", text)
+
+    def test_one_hour_ttl_prices_writes_at_2x(self):
+        # 1h cache writes bill at 2x input, not 1.25x: $0.224 base -> $0.448.
+        with Transcript(age=0) as path:
+            text, _ = run(payload(transcript_path=path),
+                          env={"CCBAR_TTL_SECONDS": "3600"})
+        self.assertEqual(re.findall(r"\$[\d.]+", text), ["$0.022", "$0.448"])
 
     def test_bar_width_override(self):
         with Transcript(age=0) as path:

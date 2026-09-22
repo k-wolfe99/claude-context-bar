@@ -6,7 +6,6 @@ plus the wall-clock time the prompt cache lapses and what the next request
 costs on either side of that moment.
 """
 import sys, json, os, time
-from datetime import date
 
 data = json.load(sys.stdin)
 model = (data.get("model") or {})
@@ -45,9 +44,21 @@ BAR_WIDTH = env_int("CCBAR_BAR_WIDTH", 24)
 # Prompt cache TTL. Set CCBAR_TTL_SECONDS=3600 if you cache with {"ttl": "1h"}.
 TTL_SECONDS = env_int("CCBAR_TTL_SECONDS", 300)
 
-# Cache reads bill at 0.1x the input rate; 5-minute cache writes at 1.25x.
-CACHE_READ_MULT = 0.1
-CACHE_WRITE_MULT = 1.25
+# Cache writes bill at 1.25x the input rate for the 5-minute TTL, 2x for 1-hour.
+CACHE_WRITE_MULT = 2.0 if TTL_SECONDS > 300 else 1.25
+
+# (substrings, input $/MTok, cache-read multiplier). First match wins, so a
+# point release sits above its base model: "opus 5" would also match Opus 5.5.
+# Source: https://platform.claude.com/docs/en/about-claude/pricing
+PRICES = [
+    (("fable-5-1", "fable 5.1", "mythos-5-1", "mythos 5.1"), 10.00, 0.025),
+    (("fable", "mythos"),                                    10.00, 0.1),
+    (("opus-5-5", "opus 5.5"),                                4.00, 0.05),
+    (("opus",),                                               5.00, 0.1),
+    (("sonnet-5", "sonnet 5"),                                2.00, 0.1),
+    (("sonnet",),                                             3.00, 0.1),
+    (("haiku",),                                              1.00, 0.1),
+]
 
 ESC = "\033"
 
@@ -76,20 +87,12 @@ def fmt(n):
         return f"{int(v)}k" if v == int(v) else f"{v:.1f}k"
     return str(n)
 
-def input_rate(model):
-    """Input price in $/million tokens, or None if the model is unrecognized."""
+def price(model):
+    """(input $/MTok, cache-read multiplier), or None if the model is unrecognized."""
     ident = " ".join(v for v in (model.get("id"), model.get("display_name")) if v).lower()
-    if "fable" in ident or "mythos" in ident:
-        return 10.00
-    if "opus" in ident:
-        return 5.00
-    if "sonnet" in ident:
-        # Sonnet 5 carries introductory input pricing through 2026-08-31.
-        if ("sonnet-5" in ident or "sonnet 5" in ident) and date.today() <= date(2026, 8, 31):
-            return 2.00
-        return 3.00
-    if "haiku" in ident:
-        return 1.00
+    for needles, rate, read_mult in PRICES:
+        if any(n in ident for n in needles):
+            return rate, read_mult
     return None
 
 def cache_expiry(transcript_path):
@@ -123,10 +126,11 @@ def cache_segment(expiry, tokens):
     """
     text = f"{ESC}[38;5;{DIM}m⏱ til {fmt_time(expiry)}{ESC}[0m"
 
-    rate = input_rate(model)
-    if rate is not None and tokens:
+    rates = price(model)
+    if rates is not None and tokens:
+        rate, read_mult = rates
         base = tokens / 1_000_000 * rate
-        text += (f"  {ESC}[38;5;{GREEN}m${base * CACHE_READ_MULT:.3f}{ESC}[0m"
+        text += (f"  {ESC}[38;5;{GREEN}m${base * read_mult:.3f}{ESC}[0m"
                  f"{ESC}[38;5;{DIM}m→{ESC}[0m"
                  f"{ESC}[38;5;{RED}m${base * CACHE_WRITE_MULT:.3f}{ESC}[0m")
 
