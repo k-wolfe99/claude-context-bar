@@ -48,6 +48,12 @@ For every session, add the folder to the `env` block of your user `settings.json
 }
 ```
 
+If the bar never appears, mods may be switched off in that install. They are early access, behind a rollout flag that stays off when Claude Code can't fetch flags: on a third-party API provider, or with telemetry turned off. `claude --debug` then logs `hooks modules are not turned on for installed plugins`. Turn them on in the same `env` block:
+
+```json
+"CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1"
+```
+
 Then remove `statusLine` from the same file if you no longer want the Python bar alongside it. Keep `subagentStatusLine`: a mod can't draw the agent panel rows, so [`claude-agent-rows.py`](#subagent-rows) still handles those.
 
 ### Options
