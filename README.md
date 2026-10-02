@@ -19,6 +19,57 @@ The bar transitions through 8 color stops as your context fills up:
 | 75–87%  | Orange-red    |
 | 87–100% | Red           |
 
+## Live countdown mod
+
+`mod/` holds the same bar as a Claude Code mod (a plugin of function hooks), drawn under the prompt where the status line was, above Claude Code's own hint line. A mod has a clock of its own, so it can do what the status line [can't](#why-a-time-and-not-a-countdown): count the cache down in real time.
+
+```
+Opus 5.5  [██████░░░░░░░░░░░░░░░░░░]  256.9k / 1M (26.0%)  ⏱ 58:59  $0.051→$2.056
+```
+
+- **The countdown ticks every second**, green to red, with no conversation activity needed. At zero it reads `⏱ lapsed` and shows only the write price, the one the next request will pay.
+- **The clock starts when each main-thread request is sent**, taken from the request itself rather than the transcript's mtime. Tool-call requests renew it. Subagent requests don't, since they cache their own prefix.
+- **On `/resume`** the bar comes back within a second with the resumed conversation's context and the time since its last response. You can see how much is sitting in cache before you send anything. If it has been idle past the TTL, it reads `⏱ lapsed` with the cost of writing it to the cache again. Both come from the last main-thread response in the transcript, not the file's mtime, because resuming appends bookkeeping rows that would make a cold cache look fresh. Only the last 4 MB of the transcript is read (with `tail`), because a long session's transcript outgrows the 4 MiB limit on a mod's file reads. Where a mod can't run commands, such as the desktop app, the whole file is read, which works until the transcript passes that limit. After that the bar shows the window with `⏱ --:--`.
+- **On `/compact`**, and on auto-compaction, the bar redraws as soon as the compaction finishes. It shows the compacted size as an estimate, `~45.3k`, with `⏱ compacted` and the write price, because nothing of the summary is cached yet. The estimate is the summary's own token count plus the system prompt, tools and memory as `/context` counts them. Claude Code's local counts run high, so expect it to be off by a few thousand tokens. The next request replaces it with the real figure and starts the countdown. A `/resume` onto a conversation whose last entry is a compaction shows the same.
+- **On `/clear`** the bar hides until the new conversation's first request, since nothing is cached yet.
+- **Until the first request after a load** the bar shows `⏱ --:--`, because when the cache was last renewed isn't known yet.
+
+The mods API is early access. This was built and tested on Claude Code 2.1.287.
+
+### Loading it
+
+For one session: `claude --plugin-dir /path/to/claude-context-bar/mod`.
+
+For every session, add the folder to the `env` block of your user `settings.json`:
+
+```json
+"env": {
+  "CLAUDE_CODE_PLUGIN_DIRS": "/path/to/claude-context-bar/mod"
+}
+```
+
+Then remove `statusLine` from the same file if you no longer want the Python bar alongside it. Keep `subagentStatusLine`: a mod can't draw the agent panel rows, so [`claude-agent-rows.py`](#subagent-rows) still handles those.
+
+### Options
+
+| Option | Default | Meaning |
+|---|---|---|
+| `cacheTtl` | `1h` | `5m` or `1h`. Claude Code caches for 1 hour on a Claude subscription and 5 minutes on an API key, unless its `promptCacheTtl` setting says otherwise. Also sets the write price: 2× input for 1h, 1.25× for 5m. |
+| `placement` | `below` | `below` draws under the prompt, in the status line's old spot. `above` draws a band over the prompt instead. |
+| `barWidth` | `24` | Progress bar width in cells. |
+
+Change them in `/config`, or set them under `pluginConfigs` in `settings.json`:
+
+```json
+"pluginConfigs": {
+  "context-bar": { "options": { "cacheTtl": "5m" } }
+}
+```
+
+### Prices
+
+`mod/hooks/format.ts` has its own copy of `PRICES`, because a mod can't import the Python script. `check_pricing.py` checks only the Python table, so `test_mod_prices.py` fails whenever the two copies differ. Update both together.
+
 ## Subagent rows
 
 The main status line always describes the main session, even while you view a subagent. So `claude-agent-rows.py` adds each running subagent's model to its row in the agent panel, beside the timer and token count:
@@ -158,9 +209,13 @@ Exit codes: `0` installed or updated, `2` couldn't read or write `settings.json`
 python3 test_context_bar.py
 python3 test_check_pricing.py
 python3 test_agent_rows.py
+python3 test_mod_prices.py
+claude plugin test mod
 ```
 
 Stdlib only — pipes synthetic payloads through the script and pins the cache clock by setting the mtime of a temporary transcript file. Times are asserted against locally-constructed epochs, so the suite is timezone-proof.
+
+The mod's tests run inside Claude Code's own plugin test kit on a mocked clock. They cover the drawn line, the countdown ticking with no events, the lapsed state, subagent requests leaving the clock alone, both TTLs, `/resume`, `/clear`, `/compact`, and the model's response passing through unchanged. `claude plugin validate mod` checks the manifest and what the module hooks. After the mod has loaded once, `tsc -p mod` type-checks it against the types the engine lays in `mod/.claude-plugin/types/` (gitignored).
 
 ## How it works
 

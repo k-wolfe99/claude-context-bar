@@ -1,0 +1,29 @@
+{
+  "name": "context-bar",
+  "version": "0.1.0",
+  "author": { "name": "Kyle Wolfe" },
+  "description": "Context window bar and a live prompt-cache countdown under the prompt",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "cacheTtl": {
+      "type": "string",
+      "title": "Prompt cache TTL",
+      "description": "5m for the default cache, 1h if this session caches with {\"ttl\": \"1h\"}",
+      "options": ["5m", "1h"],
+      "default": "1h"
+    },
+    "placement": {
+      "type": "string",
+      "title": "Placement",
+      "description": "below: under the prompt, where the status line drew. above: a band over the prompt",
+      "options": ["below", "above"],
+      "default": "below"
+    },
+    "barWidth": {
+      "type": "number",
+      "title": "Bar width",
+      "description": "Progress bar width in cells",
+      "default": 24
+    }
+  }
+}
