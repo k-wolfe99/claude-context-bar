@@ -47,7 +47,17 @@ Clone the repo, then add its `mod/` folder to the `env` block of your user `sett
 }
 ```
 
-New sessions load it. To try it in one session only, run `claude --plugin-dir /path/to/claude-context-bar/mod` instead.
+On Windows, give the full path. Backslashes must be doubled in JSON, or use forward slashes, which Windows also accepts:
+
+```json
+"env": {
+  "CLAUDE_CODE_PLUGIN_DIRS": "C:\\Users\\you\\claude-context-bar\\mod"
+}
+```
+
+If `settings.json` already has an `env` block, add the key to it rather than a second `env`; JSON keeps only one of them.
+
+New sessions load it. To try it in one session only, run `claude --plugin-dir /path/to/claude-context-bar/mod` instead. To confirm it loaded, run `claude --debug` and look for `hooks module context-bar@inline loaded` in the log under `~/.claude/debug/`.
 
 Mods are early access, behind a rollout flag. If the bar never appears, Claude Code may not be able to fetch that flag. This happens on a third-party API provider or with telemetry turned off, and `claude --debug` then logs `hooks modules are not turned on for installed plugins`. Turn mods on in the same `env` block:
 
@@ -55,11 +65,11 @@ Mods are early access, behind a rollout flag. If the bar never appears, Claude C
 "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1"
 ```
 
-If you used the status line before, remove `statusLine` from `settings.json` so the two don't draw side by side. Keep `subagentStatusLine`; the mod can't draw the [subagent rows](#subagent-rows).
+If you used this repo's status line before, remove `statusLine` from `settings.json` so the two don't draw side by side. The same goes for any other status line that shows the model or context usage: the mod already does. A status line that shows something else, such as the working directory, can stay; it draws on its own row. Keep `subagentStatusLine`; the mod can't draw the [subagent rows](#subagent-rows).
 
 To update, `git pull`. New sessions load the new version.
 
-Tested on Claude Code 2.1.284 and 2.1.287.
+Tested on Claude Code 2.1.284 and 2.1.287, and loads on Windows 11 with 2.1.287. Windows has no `tail` on its PATH, so there the mod reads the whole transcript, and on resume a transcript over about 4 MB shows `⏱ --:--` until the next request.
 
 ### Options
 
