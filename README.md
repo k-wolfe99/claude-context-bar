@@ -33,7 +33,7 @@ The status line can't count down because Claude Code only reruns it on conversat
 - **Tokens in context** against the window size.
 - **`⏱`**, the prompt cache, followed by two prices. Green is what the next request costs while the cache is warm (a cache read). Red is what it costs once the cache has lapsed and must be written again. Once it lapses, only the red price is shown.
 
-The gap between the two prices is why the timer matters. A cache write costs 1.25× the input rate on a 5-minute cache and 2× on a 1-hour cache, while a read costs 0.1× on most models and less on some (0.05× on Opus 5.5, 0.025× on Fable 5.1). Letting a large context lapse costs 12.5× to 80× more than sending in time. Every request renews the cache, including each tool call.
+The gap between the two prices is why the timer matters. A cache write costs 1.25× the input rate on a 5-minute cache and 2× on a 1-hour cache, while a read costs 0.1× on most models and less on some (0.05× on Opus 5.5 and Sonnet 5.5, 0.025× on Fable 5.1). Letting a large context lapse costs 12.5× to 80× more than sending in time. Every request renews the cache, including each tool call.
 
 ## Mod
 
@@ -165,11 +165,14 @@ Finished agents, and any row it can't read, keep Claude Code's default rendering
 | Fable 5 / Mythos 5 | 10.00 | 1.00 (0.1×) | 12.50 | 20.00 |
 | Opus 5.5 | 4.00 | 0.20 (0.05×) | 5.00 | 8.00 |
 | Opus 5 / 4.8 / 4.7 / 4.6 / 4.5 | 5.00 | 0.50 (0.1×) | 6.25 | 10.00 |
+| Sonnet 5.5 | 2.00 | 0.10 (0.05×) | 2.50 | 4.00 |
 | Sonnet 5 | 2.00 | 0.20 (0.1×) | 2.50 | 4.00 |
 | Sonnet 4.6 / 4.5 | 3.00 | 0.30 (0.1×) | 3.75 | 6.00 |
+| Haiku 5.5, prompts up to 100k tokens | 0.10 | 0.01 (0.1×) | 0.125 | 0.20 |
+| Haiku 5.5, prompts over 100k tokens | 0.50 | 0.05 (0.1×) | 0.625 | 1.00 |
 | Haiku 4.5 | 1.00 | 0.10 (0.1×) | 1.25 | 2.00 |
 
-From the [Anthropic pricing page](https://platform.claude.com/docs/en/about-claude/pricing). An unrecognized model gets the timer without prices.
+From the [Anthropic pricing page](https://platform.claude.com/docs/en/about-claude/pricing). An unrecognized model gets the timer without prices. Haiku 5.5 is priced by prompt length: a prompt over 100,000 tokens pays the higher rate on all of it, so the bar prices the context it shows at whichever rate that size falls under.
 
 Two things make the prices approximate:
 

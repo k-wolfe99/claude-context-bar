@@ -166,6 +166,27 @@ class TestPricing(unittest.TestCase):
             ["$0.009", "$0.224"],
         )
 
+    def test_sonnet_5_5(self):
+        # $2/MTok input like Sonnet 5, but cache reads at 0.05x.
+        self.assertEqual(
+            self._prices(model_id="claude-sonnet-5-5", display_name="Sonnet 5.5"),
+            ["$0.004", "$0.112"],
+        )
+
+    def test_haiku_5_5_up_to_100k(self):
+        # $0.10/MTok for a prompt up to 100,000 tokens.
+        self.assertEqual(
+            self._prices(model_id="claude-haiku-5-5", display_name="Haiku 5.5", tokens=100_000),
+            ["$0.001", "$0.013"],
+        )
+
+    def test_haiku_5_5_over_100k(self):
+        # $0.50/MTok once the prompt is over 100,000 tokens, every token of it.
+        self.assertEqual(
+            self._prices(model_id="claude-haiku-5-5", display_name="Haiku 5.5", tokens=200_000),
+            ["$0.010", "$0.125"],
+        )
+
     def test_opus_5_5_1m_context_variant(self):
         self.assertEqual(
             self._prices(model_id="claude-opus-5-5[1m]",
