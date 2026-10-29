@@ -49,14 +49,19 @@ CACHE_WRITE_MULT = 2.0 if TTL_SECONDS > 300 else 1.25
 
 # (substrings, input $/MTok, cache-read multiplier). First match wins, so a
 # point release sits above its base model: "opus 5" would also match Opus 5.5.
+# A model priced by prompt length gives its input rate as (up to tokens, rate)
+# tiers instead, the last open-ended (None): a prompt past a tier pays the next
+# tier's rate on every token.
 # Source: https://platform.claude.com/docs/en/about-claude/pricing
 PRICES = [
     (("fable-5-1", "fable 5.1", "mythos-5-1", "mythos 5.1"), 10.00, 0.025),
     (("fable", "mythos"),                                    10.00, 0.1),
     (("opus-5-5", "opus 5.5"),                                4.00, 0.05),
     (("opus",),                                               5.00, 0.1),
+    (("sonnet-5-5", "sonnet 5.5"),                            2.00, 0.05),
     (("sonnet-5", "sonnet 5"),                                2.00, 0.1),
     (("sonnet",),                                             3.00, 0.1),
+    (("haiku-5-5", "haiku 5.5"),       ((100_000, 0.10), (None, 0.50)), 0.1),
     (("haiku",),                                              1.00, 0.1),
 ]
 
@@ -87,8 +92,14 @@ def fmt(n):
         return f"{int(v)}k" if v == int(v) else f"{v:.1f}k"
     return str(n)
 
+def input_rate(rate, tokens):
+    """The input $/MTok a prompt of `tokens` pays at a PRICES rate."""
+    if isinstance(rate, tuple):
+        return next(r for limit, r in rate if limit is None or tokens <= limit)
+    return rate
+
 def price(model):
-    """(input $/MTok, cache-read multiplier), or None if the model is unrecognized."""
+    """(input rate, cache-read multiplier), or None if the model is unrecognized."""
     ident = " ".join(v for v in (model.get("id"), model.get("display_name")) if v).lower()
     for needles, rate, read_mult in PRICES:
         if any(n in ident for n in needles):
@@ -129,7 +140,7 @@ def cache_segment(expiry, tokens):
     rates = price(model)
     if rates is not None and tokens:
         rate, read_mult = rates
-        base = tokens / 1_000_000 * rate
+        base = tokens / 1_000_000 * input_rate(rate, tokens)
         text += (f"  {ESC}[38;5;{GREEN}m${base * read_mult:.3f}{ESC}[0m"
                  f"{ESC}[38;5;{DIM}m→{ESC}[0m"
                  f"{ESC}[38;5;{RED}m${base * CACHE_WRITE_MULT:.3f}{ESC}[0m")

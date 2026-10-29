@@ -28,6 +28,7 @@ COLUMNS = {
 PRICE = re.compile(r"^\$(\d+(?:\.\d+)?)\s*/\s*MTok$")
 LINK_ASIDE = re.compile(r"\s*\(\[[^\]]*\]\([^)]*\)\)")  # " ([retired, ...](url))"
 SUP = re.compile(r"<sup>.*?</sup>")
+TIER = re.compile(r"\(for prompts (up to|over) ([\d,]+) tokens\)")  # Haiku 5.5's two rows
 
 TOLERANCE = 0.0005  # $/MTok; page prices are quoted to the cent at most
 
@@ -95,6 +96,24 @@ def load_script(path):
     return prices, ast.literal_eval(write.orelse), ast.literal_eval(write.body)
 
 
+def prompt_length(name):
+    """A prompt length inside the tier a page row prices ("... (for prompts up
+    to 100,000 tokens)" -> 100000, "over" -> 100001), or None for a row priced
+    at one rate whatever the prompt."""
+    m = TIER.search(name)
+    if not m:
+        return None
+    limit = int(m.group(2).replace(",", ""))
+    return limit if m.group(1) == "up to" else limit + 1
+
+
+def input_rate(rate, tokens):
+    """The script's input_rate: the $/MTok a prompt of `tokens` pays."""
+    if isinstance(rate, tuple):
+        return next(r for limit, r in rate if limit is None or tokens <= limit)
+    return rate
+
+
 def match(name, prices):
     """The script's first-match lookup, applied to a page model name."""
     ident = name.lower()
@@ -115,6 +134,11 @@ def compare(rows, prices, write_5m, write_1h):
                          f"(page: ${row['input']:g} input, ${row['read']:g} cache read)")
             continue
         rate, read_mult = hit
+        tokens = prompt_length(name)
+        if tokens is None and isinstance(rate, tuple):
+            found.append(f"{name}: the page prices it at one rate, the script by prompt length")
+            continue
+        rate = input_rate(rate, tokens or 0)
         expected = {
             "input": rate,
             "cache read": rate * read_mult,

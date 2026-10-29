@@ -22,7 +22,8 @@ The following table shows pricing for all Claude models:
 """
 
 # Rows matching the rates in claude-context-bar.py, in the page's own format:
-# footnote markers, a limited-availability link, and a retired model.
+# footnote markers, a limited-availability link, a retired model, and a model
+# priced by prompt length.
 ROWS = {
     "fable51":  "| Claude Fable 5.1 | $10 / MTok | $12.50 / MTok | $20 / MTok | $0.25 / MTok<sup>1</sup> | $50 / MTok |",
     "mythos51": "| Claude Mythos 5.1 ([limited availability](https://anthropic.com/glasswing)) | $10 / MTok | $12.50 / MTok | $20 / MTok | $0.25 / MTok<sup>1</sup> | $50 / MTok |",
@@ -30,8 +31,11 @@ ROWS = {
     "opus55":   "| Claude Opus 5.5 | $4 / MTok | $5 / MTok | $8 / MTok | $0.20 / MTok<sup>2</sup> | $20 / MTok |",
     "opus5":    "| Claude Opus 5 | $5 / MTok | $6.25 / MTok | $10 / MTok | $0.50 / MTok | $25 / MTok |",
     "opus41":   "| Claude Opus 4.1 ([retired, except on Bedrock and Google Cloud](https://example.com)) | $15 / MTok | $18.75 / MTok | $30 / MTok | $1.50 / MTok | $75 / MTok |",
+    "sonnet55": "| Claude Sonnet 5.5 | $2 / MTok | $2.50 / MTok | $4 / MTok | $0.10 / MTok<sup>2</sup> | $10 / MTok |",
     "sonnet5":  "| Claude Sonnet 5 | $2 / MTok | $2.50 / MTok | $4 / MTok | $0.20 / MTok | $10 / MTok |",
     "sonnet46": "| Claude Sonnet 4.6 | $3 / MTok | $3.75 / MTok | $6 / MTok | $0.30 / MTok | $15 / MTok |",
+    "haiku55":  "| Claude Haiku 5.5 (for prompts up to 100,000 tokens) | $0.10 / MTok | $0.125 / MTok | $0.20 / MTok | $0.01 / MTok | $0.50 / MTok |",
+    "haiku55l": "| Claude Haiku 5.5 (for prompts over 100,000 tokens) | $0.50 / MTok | $0.625 / MTok | $1 / MTok | $0.05 / MTok | $2.50 / MTok |",
     "haiku45":  "| Claude Haiku 4.5 | $1 / MTok | $1.25 / MTok | $2 / MTok | $0.10 / MTok | $5 / MTok |",
 }
 
@@ -127,9 +131,30 @@ class TestCompare(unittest.TestCase):
     def test_point_release_priced_differently_is_reported(self):
         """The Opus 5.5 failure mode: a new model that falls through to an
         older row and silently takes that row's price."""
-        new = "| Claude Sonnet 5.5 | $2.50 / MTok | $3.125 / MTok | $5 / MTok | $0.25 / MTok | $12.50 / MTok |"
-        found = diff(page(sonnet55=new))
-        self.assertTrue(any("Claude Sonnet 5.5" in d for d in found), found)
+        new = "| Claude Opus 5.7 | $4.50 / MTok | $5.625 / MTok | $9 / MTok | $0.45 / MTok | $22.50 / MTok |"
+        found = diff(page(opus57=new))
+        self.assertTrue(any("Claude Opus 5.7" in d for d in found), found)
+
+    def test_each_prompt_length_tier_is_checked(self):
+        found = diff(page(haiku55l="| Claude Haiku 5.5 (for prompts over 100,000 tokens) | $0.60 / MTok | $0.75 / MTok | $1.20 / MTok | $0.06 / MTok | $3 / MTok |"))
+        self.assertTrue(any("over 100,000" in d and "input is $0.6/MTok on the page, $0.5/MTok" in d for d in found), found)
+        self.assertFalse(any("up to 100,000" in d for d in found), found)
+
+    def test_a_moved_threshold_is_reported(self):
+        found = diff(page(
+            haiku55="| Claude Haiku 5.5 (for prompts up to 200,000 tokens) | $0.10 / MTok | $0.125 / MTok | $0.20 / MTok | $0.01 / MTok | $0.50 / MTok |",
+            haiku55l="| Claude Haiku 5.5 (for prompts over 200,000 tokens) | $0.50 / MTok | $0.625 / MTok | $1 / MTok | $0.05 / MTok | $2.50 / MTok |",
+        ))
+        self.assertTrue(any("up to 200,000" in d and "input" in d for d in found), found)
+
+    def test_a_tier_the_script_lacks_is_reported(self):
+        """A flat-priced model that gains prompt-length tiers, as Haiku 5.5 did."""
+        found = diff(page(haiku45="| Claude Haiku 4.5 (for prompts over 100,000 tokens) | $2 / MTok | $2.50 / MTok | $4 / MTok | $0.20 / MTok | $10 / MTok |"))
+        self.assertTrue(any("Claude Haiku 4.5 (for prompts over 100,000 tokens): input" in d for d in found), found)
+
+    def test_tiers_the_page_drops_are_reported(self):
+        found = diff(page(haiku55="| Claude Haiku 5.5 | $0.10 / MTok | $0.125 / MTok | $0.20 / MTok | $0.01 / MTok | $0.50 / MTok |", haiku55l=None))
+        self.assertTrue(any("Claude Haiku 5.5" in d and "prompt length" in d for d in found), found)
 
 
 class TestMain(unittest.TestCase):

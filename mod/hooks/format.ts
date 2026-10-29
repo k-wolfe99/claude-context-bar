@@ -2,15 +2,21 @@
 
 // (substrings, input $/MTok, cache-read multiplier). First match wins, so a
 // point release sits above its base model: "opus" would also match Opus 5.5.
+// A model priced by prompt length gives its input rate as [up to tokens, rate]
+// tiers instead, the last open-ended (null): a prompt past a tier pays the next
+// tier's rate on every token.
 // Mirrors PRICES in claude-context-bar.py; check_pricing.py checks that one.
 // Source: https://platform.claude.com/docs/en/about-claude/pricing
-export const PRICES: ReadonlyArray<readonly [readonly string[], number, number]> = [
+type Rate = number | ReadonlyArray<readonly [number | null, number]>
+export const PRICES: ReadonlyArray<readonly [readonly string[], Rate, number]> = [
   [['fable-5-1', 'fable 5.1', 'mythos-5-1', 'mythos 5.1'], 10.0, 0.025],
   [['fable', 'mythos'], 10.0, 0.1],
   [['opus-5-5', 'opus 5.5'], 4.0, 0.05],
   [['opus'], 5.0, 0.1],
+  [['sonnet-5-5', 'sonnet 5.5'], 2.0, 0.05],
   [['sonnet-5', 'sonnet 5'], 2.0, 0.1],
   [['sonnet'], 3.0, 0.1],
+  [['haiku-5-5', 'haiku 5.5'], [[100_000, 0.1], [null, 0.5]], 0.1],
   [['haiku'], 1.0, 0.1],
 ]
 
@@ -56,11 +62,14 @@ export function fmtTokens(n: number): string {
   return String(n)
 }
 
-/** Input $/MTok and the cache-read multiplier, or undefined for an unknown model. */
-export function price(model: string): { rate: number; readMult: number } | undefined {
+/** Input $/MTok for a prompt of `tokens` and the cache-read multiplier, or undefined for an unknown model. */
+export function price(model: string, tokens: number): { rate: number; readMult: number } | undefined {
   const ident = model.toLowerCase()
   const hit = PRICES.find(([needles]) => needles.some(n => ident.includes(n)))
-  return hit && { rate: hit[1], readMult: hit[2] }
+  if (!hit) return undefined
+  const [, rate, readMult] = hit
+  const tier = typeof rate === 'number' ? undefined : rate.find(([limit]) => limit === null || tokens <= limit)
+  return { rate: tier ? tier[1] : (rate as number), readMult }
 }
 
 /** What the next request costs over `tokens`: inside the TTL, and after it. */
@@ -69,7 +78,7 @@ export function cachePrices(
   tokens: number,
   writeMult: number,
 ): { read: number; write: number } | undefined {
-  const p = price(model)
+  const p = price(model, tokens)
   if (!p || tokens <= 0) return undefined
   const base = (tokens / 1_000_000) * p.rate
   return { read: base * p.readMult, write: base * writeMult }

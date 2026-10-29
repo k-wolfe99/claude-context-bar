@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On, RenderPropsOf } from 'claude-code'
 
-import { countdown, fmtTokens, modelName } from '../hooks/format'
+import { cachePrices, countdown, fmtTokens, modelName } from '../hooks/format'
 
 const OPUS = 'claude-opus-5-5'
 const FIVE = { options: { cacheTtl: '5m' } }
@@ -526,6 +526,22 @@ describe('format', () => {
     expect(fmtTokens(200_000)).toBe('200k')
     expect(fmtTokens(1_000_000)).toBe('1M')
     expect(fmtTokens(999)).toBe('999')
+  })
+
+  test('Sonnet 5.5 reads its cache at 0.05x, Sonnet 5 at 0.1x', () => {
+    expect(cachePrices('claude-sonnet-5-5', 1_000_000, 1.25)).toEqual({ read: 0.1, write: 2.5 })
+    expect(cachePrices('claude-sonnet-5', 1_000_000, 1.25)).toEqual({ read: 0.2, write: 2.5 })
+  })
+
+  test('Haiku 5.5 is priced by prompt length: every token at the higher rate past 100,000', () => {
+    // As the bar shows them, to the tenth of a cent.
+    const shown = (model: string, tokens: number) => {
+      const p = cachePrices(model, tokens, 2)
+      return p && [p.read.toFixed(3), p.write.toFixed(3)]
+    }
+    expect(shown('claude-haiku-5-5', 100_000)).toEqual(['0.001', '0.020'])
+    expect(shown('claude-haiku-5-5', 200_000)).toEqual(['0.010', '0.200'])
+    expect(shown('claude-haiku-4-5', 200_000)).toEqual(['0.020', '0.400'])
   })
 
   test('countdowns round up, so 0:00 only shows once lapsed', () => {
