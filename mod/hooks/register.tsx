@@ -11,19 +11,26 @@ const snap = atom({ plugin: 'context-bar', key: 'snap' } as const, null)
 const now = atom({ plugin: 'context-bar', key: 'now' } as const, 0)
 
 /**
- * The conversation's last main-thread response, read from its transcript: what
- * it was answered over and when. Claude Code names the transcript after the
- * session id, under projects/ in its config directory, in a folder named for
- * the working directory with every other character replaced by '-'. The
- * response's own timestamp is used, not the file's mtime, because resuming
- * appends bookkeeping rows that would make a cold cache look fresh. A
- * compaction since that response stands in for it: nothing after it is cached.
+ * The transcript of the conversation now on screen. Claude Code names it after
+ * the session id, under projects/ in its config directory, in a folder named
+ * for the working directory with every other character replaced by '-'.
  */
-async function lastResponse($: EngineInterface): Promise<Snapshot | null> {
+async function transcriptPath($: EngineInterface): Promise<string> {
   const id = await $.session.id()
   const config = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${await $.env.get('HOME')}/.claude`
   const project = (await $.session.cwd()).replace(/[^A-Za-z0-9]/g, '-')
-  const text = await tail($, `${config}/projects/${project}/${id}.jsonl`)
+  return `${config}/projects/${project}/${id}.jsonl`
+}
+
+/**
+ * The conversation's last main-thread response, read from its transcript: what
+ * it was answered over and when. The response's own timestamp is used, not the
+ * file's mtime, because resuming appends bookkeeping rows that would make a
+ * cold cache look fresh. A compaction since that response stands in for it:
+ * nothing after it is cached.
+ */
+async function lastResponse($: EngineInterface): Promise<Snapshot | null> {
+  const text = await tail($, await transcriptPath($))
   if (text === null) return null
   // The tail may start mid-row; that row fails to parse and is skipped.
   const rows = text.split('\n')
@@ -56,21 +63,40 @@ async function lastResponse($: EngineInterface): Promise<Snapshot | null> {
 /**
  * The end of a transcript, where its last response is. A long session's file
  * outgrows $.fs.read's 4 MiB limit (7 MB is ordinary), so the CLI reads the
- * last 4 MB with tail. $.process.run is CLI-only, so elsewhere the whole file
- * is read, which works while it is under the limit.
+ * last 4 MB with tail, or with PowerShell on Windows, which has no tail.
+ * $.process.run is CLI-only, so elsewhere the whole file is read, which works
+ * while it is under the limit.
  */
 async function tail($: EngineInterface, path: string): Promise<string | null> {
-  try {
-    const { exitCode, stdout } = await $.process.run(['tail', '-c', '4000000', path], { timeoutMs: 5_000 })
-    if (exitCode === 0) return stdout
-  } catch {
-    // No host commands here: fall through to a whole-file read.
+  for (const argv of [['tail', '-c', String(TAIL_BYTES), path], powershellTail(path)]) {
+    try {
+      const { exitCode, stdout } = await $.process.run(argv, { timeoutMs: 5_000 })
+      if (exitCode === 0) return stdout
+    } catch {
+      // Not on this host, or no host commands here: try the next way.
+    }
   }
   try {
     return await $.fs.read(path)
   } catch {
     return null
   }
+}
+
+/** Bytes read from the end of a transcript: under $.process.run's 4 MiB of stdout. */
+const TAIL_BYTES = 4_000_000
+
+/**
+ * `tail -c` in Windows PowerShell 5.1, which every Windows install has: the
+ * file opened shared, so Claude Code can keep writing it, and the bytes
+ * written raw, so PowerShell doesn't re-encode them.
+ */
+function powershellTail(path: string): string[] {
+  const quoted = `'${path.replace(/'/g, "''")}'`
+  return ['powershell', '-NoProfile', '-NonInteractive', '-Command',
+    `$f = [IO.File]::Open(${quoted}, 'Open', 'Read', 'ReadWrite'); ` +
+    `$n = [Math]::Min($f.Length, ${TAIL_BYTES}); $null = $f.Seek(-$n, 'End'); ` +
+    `$b = [IO.BinaryReader]::new($f).ReadBytes($n); [Console]::OpenStandardOutput().Write($b, 0, $b.Length)`]
 }
 
 /**
@@ -140,6 +166,9 @@ export const register: Register = (on, options) => {
   // switch drops this plugin's $.state. So the clock checks every tick.
   let sessionId = ''
 
+  // The transcript's size when the clock last read it for a compaction.
+  let readAtSize: number | undefined
+
   // The status line repaints on conversation events only, so it could never
   // count down. This clock ticks on its own, and stops writing once the cache
   // has lapsed, so an idle session isn't redrawn every second for nothing.
@@ -170,10 +199,16 @@ export const register: Register = (on, options) => {
         await update($, now, () => t)
       } else if (sentAt) {
         if ((await $.session.usage()).context.tokens === undefined) {
-          const after = await lastResponse($)
-          if (after?.compacted) {
-            sentAt = 0
-            await update($, snap, () => after)
+          // Read it again only once it has grown: the boundary lands after the
+          // count drops, and a transcript that can't be read won't improve.
+          const size = await $.fs.stat(await transcriptPath($)).then(f => f.size, () => -1)
+          if (size !== readAtSize) {
+            readAtSize = size
+            const after = await lastResponse($)
+            if (after?.compacted) {
+              sentAt = 0
+              await update($, snap, () => after)
+            }
           }
         }
         if (t <= sentAt + ttlMs + 1000) await update($, now, () => t)

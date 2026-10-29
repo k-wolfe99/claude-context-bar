@@ -69,7 +69,7 @@ If you used this repo's status line before, remove `statusLine` from `settings.j
 
 To update, `git pull`. New sessions load the new version.
 
-Tested on Claude Code 2.1.284 and 2.1.287, and loads on Windows 11 with 2.1.287. Windows has no `tail` on its PATH, so there the mod reads the whole transcript, and on resume a transcript over about 4 MB shows `⏱ --:--` until the next request.
+Tested on Claude Code 2.1.284 and 2.1.287, and loads on Windows 11 with 2.1.287. Windows has no `tail` on its PATH, so there the mod reads the end of the transcript with PowerShell.
 
 ### Options
 

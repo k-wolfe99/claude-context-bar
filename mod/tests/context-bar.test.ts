@@ -35,6 +35,10 @@ function transcript(at: number, tokens: number) {
 /** The conversation on screen, its transcripts, and whether host commands run (the CLI) or not. */
 type World = {
   id: string; files: Record<string, string>; hasTail?: boolean; readLimit?: number
+  /** Windows: no tail on the PATH, PowerShell instead. */
+  isWindows?: boolean
+  /** How many times a transcript has been read, by any means. */
+  reads?: number
   /** /context's breakdown, as [row, tokens, kind]; absent, the engine gives none. */
   rows?: [string, number, string][]
   /** What a compaction comes to; absent, it stands at 18,340 tokens. */
@@ -75,18 +79,39 @@ function engine(on: On, { tokens = 44_800, world = { id: 'conv-a', files: {} } }
   mock.env(on, { CLAUDE_CONFIG_DIR: '/cfg' })
   // $.fs.read rejects past its limit (4 MiB live); tail reads the end of any size.
   on('fs.read', ($, e) => {
+    world.reads = (world.reads ?? 0) + 1
     const text = world.files[e.path]
     if (text === undefined) throw new Error(`ENOENT: ${e.path}`)
     if (text.length > (world.readLimit ?? Infinity)) throw new Error('over 4 MiB')
     return { value: text }
   })
+  on('fs.stat', ($, e) => {
+    const text = world.files[e.path]
+    if (text === undefined) throw new Error(`ENOENT: ${e.path}`)
+    return { value: { kind: 'file' as const, size: text.length, mtimeMs: 0, isLink: false } }
+  })
   on('process.run', ($, e) => {
     if (world.hasTail === false) throw new Error('no host commands on this surface')
-    const [cmd, flag, bytes, path] = e.argv
-    if (cmd !== 'tail' || flag !== '-c' || path === undefined) throw new Error(`unexpected ${e.argv.join(' ')}`)
+    const [cmd, flag, n, file] = e.argv
+    let path: string | undefined
+    let bytes: number
+    if (cmd === 'tail' && !world.isWindows) {
+      if (flag !== '-c' || file === undefined) throw new Error(`unexpected ${e.argv.join(' ')}`)
+      path = file
+      bytes = Number(n)
+    } else if (cmd === 'powershell' && world.isWindows) {
+      // The script names the file in single quotes, its own quotes doubled.
+      const script = e.argv[e.argv.length - 1] ?? ''
+      path = /Open\('((?:[^']|'')*)'/.exec(script)?.[1]?.replace(/''/g, "'")
+      bytes = Number(/Min\(\$f\.Length, (\d+)\)/.exec(script)?.[1])
+      if (path === undefined || !bytes) throw new Error(`unexpected script: ${script}`)
+    } else {
+      throw new Error(`${cmd}: command not found`)
+    }
+    world.reads = (world.reads ?? 0) + 1
     const text = world.files[path]
     if (text === undefined) return { value: { exitCode: 1, stdout: '', stderr: 'No such file', isStdoutTruncated: false, isStderrTruncated: false } }
-    return { value: { exitCode: 0, stdout: text.slice(-Number(bytes)), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    return { value: { exitCode: 0, stdout: text.slice(-bytes), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   // The engine draws nothing of its own in the band, and its hint line under the prompt.
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box' as const }))
@@ -264,6 +289,19 @@ describe('bar', () => {
     expect(await line()).toContain('300k / 1M (30.0%)  ⏱ 2:59')
   })
 
+  test('on Windows, with no tail, PowerShell reads the end of a transcript too big to read whole', FIVE, async ($, on) => {
+    const world: World = { id: 'conv-a', files: {}, readLimit: 1_000, isWindows: true }
+    const clock = engine(on, { tokens: 0, world })
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    const line = await below($)
+    const history = (JSON.stringify({ type: 'user', text: 'x'.repeat(500) }) + '\n').repeat(10)
+    // A quote in the path must survive PowerShell's quoting.
+    world.files[transcriptOf("conv-o'b")] = history + transcript(clock.now() - 120_000, 300_000)
+    world.id = "conv-o'b"
+    await clock.advance(1_000)
+    expect(await line()).toContain('300k / 1M (30.0%)  ⏱ 2:59')
+  })
+
   test('without host commands (the desktop), a transcript under the read limit is read whole', FIVE, async ($, on) => {
     const world: World = { id: 'conv-a', files: {}, hasTail: false }
     const clock = engine(on, { tokens: 0, world })
@@ -370,6 +408,24 @@ describe('bar', () => {
     )
     await step($)
     expect(await line()).toContain('⏱ 5:00')
+  })
+
+  test('after a compaction, a transcript it cannot read is tried once, and again only once it grows', FIVE, async ($, on) => {
+    const world: World = { id: 'conv-a', files: {}, rows: ROWS, hasTail: false, readLimit: 10 }
+    const clock = engine(on, { tokens: 421_000, world })
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    await step($)
+    const line = await below($)
+    world.files[transcriptOf('conv-a')] = transcript(clock.now(), 421_000)
+    world.live = false
+    world.reads = 0
+    await clock.advance(5_000)
+    expect(world.reads).toBe(1)
+    world.files[transcriptOf('conv-a')] += JSON.stringify({ type: 'user' }) + '\n'
+    await clock.advance(1_000)
+    expect(world.reads).toBe(2)
+    // Unreadable, so the bar keeps what it knew until the next response.
+    expect(await line()).toContain('421k / 1M')
   })
 
   test('a /resume onto a compacted conversation shows the compacted size, not the last response', FIVE, async ($, on) => {
