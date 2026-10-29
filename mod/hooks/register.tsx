@@ -143,6 +143,12 @@ export const register: Register = (on, options) => {
   // The status line repaints on conversation events only, so it could never
   // count down. This clock ticks on its own, and stops writing once the cache
   // has lapsed, so an idle session isn't redrawn every second for nothing.
+  //
+  // It also catches a compaction the mod is never told of. For a Team or
+  // Enterprise organization, Claude Code's security default (2.1.312) sends
+  // session.compact on past user plugins. The engine still drops the window's
+  // token count when one stands, until the next response, and the transcript
+  // gains a boundary, which may land a tick later than the count drops.
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     sessionId = await $.session.id()
@@ -162,8 +168,15 @@ export const register: Register = (on, options) => {
         sentAt = switched?.sentAt ?? 0
         await update($, snap, () => switched)
         await update($, now, () => t)
-      } else if (sentAt && t <= sentAt + ttlMs + 1000) {
-        await update($, now, () => t)
+      } else if (sentAt) {
+        if ((await $.session.usage()).context.tokens === undefined) {
+          const after = await lastResponse($)
+          if (after?.compacted) {
+            sentAt = 0
+            await update($, snap, () => after)
+          }
+        }
+        if (t <= sentAt + ttlMs + 1000) await update($, now, () => t)
       }
     })
     return result
@@ -196,7 +209,7 @@ export const register: Register = (on, options) => {
 
   // A compaction replaces the conversation with a summary between requests, so
   // the bar would show the old size until the next one. Redraw it as soon as
-  // the compaction stands. A subagent's or fork's own compaction, a precompute
+  // the compaction stands. Where this hook is passed over, the clock does it. A subagent's or fork's own compaction, a precompute
   // (kept for later, installs nothing) and a vetoed one leave it alone.
   on('session.compact', async ($, e, next) => {
     const result = await next(e)
