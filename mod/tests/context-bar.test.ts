@@ -39,6 +39,8 @@ type World = {
   rows?: [string, number, string][]
   /** What a compaction comes to; absent, it stands at 18,340 tokens. */
   compaction?: { skip: string } | { tokensAfter?: number }
+  /** False once a compaction stands: the engine drops `tokens` until the next response. */
+  live?: boolean
 }
 
 function engine(on: On, { tokens = 44_800, world = { id: 'conv-a', files: {} } }: { tokens?: number; world?: World } = {}) {
@@ -46,6 +48,7 @@ function engine(on: On, { tokens = 44_800, world = { id: 'conv-a', files: {} } }
   const clock = mock.clock(on, { now: Date.UTC(2026, 9, 2, 14, 0) })
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('turn.step', async function* ($, e) {
+    world.live = true
     return {
       turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn' as const,
       usage: {
@@ -57,7 +60,8 @@ function engine(on: On, { tokens = 44_800, world = { id: 'conv-a', files: {} } }
   on('session.usage', ($, e) => {
     const categories = world.rows?.map(([name, n, kind]) => ({ name, tokens: n, kind }))
     const breakdown = e.breakdown && categories ? { categories } : undefined
-    const context = { tokens, window: 1_000_000, percent: (tokens / 1_000_000) * 100, ...(breakdown ? { breakdown } : {}) }
+    const measured = world.live === false ? {} : { tokens, percent: (tokens / 1_000_000) * 100 }
+    const context = { ...measured, window: 1_000_000, ...(breakdown ? { breakdown } : {}) }
     // The breakdown carries a grid and totals too; the bar reads only its rows.
     return { value: { startedAt: 0, context, rateLimits: [] } as never }
   })
@@ -343,6 +347,31 @@ describe('bar', () => {
     expect(await line()).toContain('421k / 1M (42.1%)  ⏱ 5:00')
   })
 
+  test('a compaction whose event never reaches the mod redraws within a second of its boundary', FIVE, async ($, on) => {
+    // For a Team or Enterprise organization, Claude Code's security default
+    // sends session.compact on past user plugins. The engine still drops the
+    // window's token count, and the transcript gains a boundary.
+    const world: World = { id: 'conv-a', files: {}, rows: ROWS }
+    const clock = engine(on, { tokens: 421_000, world })
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    await step($)
+    const line = await below($)
+    expect(await line()).toContain('421k / 1M')
+    const before = transcript(clock.now(), 421_000)
+    world.files[transcriptOf('conv-a')] = before
+    world.live = false
+    // The count can drop before the boundary is written: keep looking.
+    await clock.advance(1_000)
+    const boundary = { type: 'system', subtype: 'compact_boundary', compactMetadata: { postTokens: 18_340 } }
+    world.files[transcriptOf('conv-a')] = before + JSON.stringify(boundary) + '\n' + JSON.stringify({ type: 'user' }) + '\n'
+    await clock.advance(1_000)
+    expect(await line()).toBe(
+      'Opus 5.5  [' + '█' + '░'.repeat(23) + ']  ~45.3k / 1M (4.5%)  ⏱ compacted  $0.227',
+    )
+    await step($)
+    expect(await line()).toContain('⏱ 5:00')
+  })
+
   test('a /resume onto a compacted conversation shows the compacted size, not the last response', FIVE, async ($, on) => {
     const world: World = { id: 'conv-a', files: {}, rows: ROWS }
     const clock = engine(on, { tokens: 0, world })
@@ -366,7 +395,8 @@ describe('bar', () => {
     const tree = (await ui.drawn()) as Node
     expect(tree.props?.flexDirection).toBe('column')
     expect(flat(tree.children?.[0])).toContain('Opus 5.5  [')
-    expect(tree.children?.[1]).toEqual({ type: 'Text', children: [HINT] })
+    // The engine's node as it drew it; the engine stamps whose it is (`part`).
+    expect(tree.children?.[1]).toMatchObject({ type: 'Text', children: [HINT] })
     // No indent of its own, so the model name lines up with the hint line's
     // mode arrows, as the status line did. The container already pads both.
     expect(tree.children?.[0]?.props?.paddingLeft).toBeUndefined()
@@ -397,7 +427,7 @@ describe('bar', () => {
     const above = await band($)
     expect(await above()).toContain('Opus 5.5  [')
     const ui = await $.ui.mount({ plugin: 'context-bar', surface: 'terminal', component: 'PromptHint', props: PROMPT_HINT })
-    expect(await ui.drawn()).toEqual({ type: 'Text', children: [HINT] })
+    expect(await ui.drawn()).toMatchObject({ type: 'Text', children: [HINT] })
     // An offset row is clipped to the band and draws nothing (seen on 2.1.287).
     const tree = (await (await $.ui.mount({ plugin: 'context-bar', surface: 'terminal', component: 'AbovePrompt', props: BAND })).drawn()) as Node
     expect(tree.props?.top).toBeUndefined()
