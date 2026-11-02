@@ -10,16 +10,43 @@ import {
 const snap = atom({ plugin: 'context-bar', key: 'snap' } as const, null)
 const now = atom({ plugin: 'context-bar', key: 'now' } as const, 0)
 
+/** Where each conversation's transcript was found, by session id. */
+const transcripts = new Map<string, string>()
+
 /**
  * The transcript of the conversation now on screen. Claude Code names it after
  * the session id, under projects/ in its config directory, in a folder named
- * for the working directory with every other character replaced by '-'.
+ * for the directory the conversation started in, every other character
+ * replaced by '-'. A cd since then leaves that folder behind, so the session's
+ * root and current directory are tried first, then every project folder,
+ * newest first, for a file with that id.
  */
 async function transcriptPath($: EngineInterface): Promise<string> {
   const id = await $.session.id()
+  const known = transcripts.get(id)
+  if (known) return known
   const config = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${await $.env.get('HOME')}/.claude`
-  const project = (await $.session.cwd()).replace(/[^A-Za-z0-9]/g, '-')
-  return `${config}/projects/${project}/${id}.jsonl`
+  const projects = `${config}/projects`
+  const folder = (dir: string) => dir.replace(/[^A-Za-z0-9]/g, '-')
+  const named = [folder(await $.session.root()), folder(await $.session.cwd())]
+  const find = async (names: Iterable<string>) => {
+    for (const name of names) {
+      const path = `${projects}/${name}/${id}.jsonl`
+      if (await $.fs.exists(path)) return path
+    }
+    return undefined
+  }
+  const found =
+    (await find(new Set(named))) ??
+    (await find(
+      await $.fs.list(projects).then(
+        entries => entries.filter(e => e.kind === 'dir').sort((a, b) => b.mtimeMs - a.mtimeMs).map(e => e.name),
+        () => [],
+      ),
+    ))
+  if (found === undefined) return `${projects}/${named[0]}/${id}.jsonl`
+  transcripts.set(id, found)
+  return found
 }
 
 /**
