@@ -45,6 +45,8 @@ type World = {
   compaction?: { skip: string } | { tokensAfter?: number }
   /** False once a compaction stands: the engine drops `tokens` until the next response. */
   live?: boolean
+  /** Where the session runs now, and its project root; absent, where it started. */
+  cwd?: string; root?: string
 }
 
 function engine(on: On, { tokens = 44_800, world = { id: 'conv-a', files: {} } }: { tokens?: number; world?: World } = {}) {
@@ -75,7 +77,15 @@ function engine(on: On, { tokens = 44_800, world = { id: 'conv-a', files: {} } }
   })
   on('session.model', () => ({ value: OPUS }))
   on('session.id', () => ({ value: world.id }))
-  on('session.cwd', () => ({ value: '/work/my repo' }))
+  on('session.cwd', () => ({ value: world.cwd ?? '/work/my repo' }))
+  on('session.root', () => ({ value: world.root ?? '/work/my repo' }))
+  on('fs.exists', ($, e) => ({ value: e.path in world.files }))
+  on('fs.list', ($, e) => {
+    const dirs = new Set(Object.keys(world.files)
+      .filter(f => f.startsWith(`${e.path}/`)).map(f => f.slice(e.path.length + 1).split('/')[0]!))
+    if (dirs.size === 0) throw new Error(`ENOENT: ${e.path}`)
+    return { value: [...dirs].map(name => ({ name, kind: 'dir' as const, size: 0, mtimeMs: 0, isLink: false })) }
+  })
   mock.env(on, { CLAUDE_CONFIG_DIR: '/cfg' })
   // $.fs.read rejects past its limit (4 MiB live); tail reads the end of any size.
   on('fs.read', ($, e) => {
@@ -426,6 +436,34 @@ describe('bar', () => {
     expect(world.reads).toBe(2)
     // Unreadable, so the bar keeps what it knew until the next response.
     expect(await line()).toContain('421k / 1M')
+  })
+
+  test('after a cd, a compaction still finds the transcript, named for where the session started', FIVE, async ($, on) => {
+    const world: World = { id: 'conv-a', files: {}, rows: ROWS }
+    const clock = engine(on, { tokens: 421_000, world })
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    await step($)
+    const line = await below($)
+    world.cwd = '/work/my repo/bench'
+    const boundary = { type: 'system', subtype: 'compact_boundary', compactMetadata: { postTokens: 18_340 } }
+    world.files[transcriptOf('conv-a')] = transcript(clock.now(), 421_000) + JSON.stringify(boundary) + '\n'
+    world.live = false
+    await clock.advance(1_000)
+    expect(await line()).toContain('~45.3k / 1M (4.5%)  ⏱ compacted')
+  })
+
+  test('after a /cd moves the root too, the transcript is found by its id among the projects', FIVE, async ($, on) => {
+    const world: World = { id: 'conv-a', files: { '/cfg/projects/-work-other/conv-z.jsonl': '' }, rows: ROWS }
+    const clock = engine(on, { tokens: 421_000, world })
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    await step($)
+    const line = await below($)
+    world.cwd = world.root = '/work/elsewhere'
+    const boundary = { type: 'system', subtype: 'compact_boundary', compactMetadata: { postTokens: 18_340 } }
+    world.files[transcriptOf('conv-a')] = transcript(clock.now(), 421_000) + JSON.stringify(boundary) + '\n'
+    world.live = false
+    await clock.advance(1_000)
+    expect(await line()).toContain('~45.3k / 1M (4.5%)  ⏱ compacted')
   })
 
   test('a /resume onto a compacted conversation shows the compacted size, not the last response', FIVE, async ($, on) => {
