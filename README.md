@@ -11,6 +11,7 @@ It comes in two forms:
 | | Mod (`mod/`) | Status line (`claude-context-bar.py`) |
 |---|---|---|
 | Cache readout | A live countdown, ticking every second | The time the cache lapses, `⏱ til 1:24pm` |
+| [Subagent rows](#subagent-rows) | Drawn by the mod, from Claude Code 2.1.327 | `claude-agent-rows.py`, as `subagentStatusLine` |
 | Needs | Claude Code with mods (early access) | Any Claude Code from v1.0.71, and Python 3 |
 
 The status line can't count down because Claude Code only reruns it on conversation events, never on a timer. Use the mod if your Claude Code supports mods, and the status line otherwise.
@@ -65,11 +66,11 @@ Mods are early access, behind a rollout flag. If the bar never appears, Claude C
 "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1"
 ```
 
-If you used this repo's status line before, remove `statusLine` from `settings.json` so the two don't draw side by side. The same goes for any other status line that shows the model or context usage: the mod already does. A status line that shows something else, such as the working directory, can stay; it draws on its own row. Keep `subagentStatusLine`; the mod can't draw the [subagent rows](#subagent-rows).
+If you used this repo's status line before, remove `statusLine` from `settings.json` so the two don't draw side by side. The same goes for any other status line that shows the model or context usage: the mod already does. A status line that shows something else, such as the working directory, can stay; it draws on its own row. From Claude Code 2.1.327 the mod draws the [subagent rows](#subagent-rows) too, so remove `subagentStatusLine` as well; Claude Code now marks it deprecated. On an earlier version, keep it: the mod's agent rows never run there, and the rest of the mod works as before.
 
 To update, `git pull`. New sessions load the new version.
 
-Tested on Claude Code 2.1.284 and 2.1.287, and loads on Windows 11 with 2.1.287. Windows has no `tail` on its PATH, so there the mod reads the end of the transcript with PowerShell.
+Tested on Claude Code 2.1.284 and 2.1.287, and loads on Windows 11 with 2.1.287. The subagent rows were tested on 2.1.327. Windows has no `tail` on its PATH, so there the mod reads the end of the transcript with PowerShell.
 
 ### Options
 
@@ -149,13 +150,16 @@ The cache is timed from the transcript file's last modification, which tracks th
 
 ## Subagent rows
 
-The main bar always describes the main session, even while you view a subagent. `claude-agent-rows.py`, set as `subagentStatusLine`, adds each running subagent's model to its row in the agent panel:
+The main bar always describes the main session, even while you view a subagent. Each running subagent's row in the agent panel gets its model, beside the timer and token count:
 
 ```
 ○ general-purpose  Committing porSpan clamp fix             Opus 5.5 · 2m 7s · ↓ 110.9k tokens
 ```
 
-Finished agents, and any row it can't read, keep Claude Code's default rendering. It works alongside either form of the bar.
+Finished agents, and agents with no model yet, keep Claude Code's default row.
+
+- **The mod** draws these rows from Claude Code 2.1.327, which added the agent row to the mod API. Its timer ticks every second.
+- **`claude-agent-rows.py`**, set as `subagentStatusLine`, draws them on earlier versions, alongside either form of the bar. Claude Code 2.1.326 and later mark `subagentStatusLine` deprecated, so move to the mod when you can. With both set, the mod's row wins.
 
 ## Prices
 
@@ -200,4 +204,4 @@ claude plugin test mod
 claude plugin validate mod
 ```
 
-The Python tests use only the standard library. The mod's tests run in Claude Code's plugin test kit on a mocked clock. Once the mod has loaded, Claude Code writes its API types to `mod/.claude-plugin/types/` (gitignored), and `npx -p typescript tsc -p mod` type-checks it.
+The Python tests use only the standard library. The mod's tests run in Claude Code's plugin test kit on a mocked clock. Once the mod has loaded, Claude Code writes its API types to `mod/.claude-plugin/types/` (gitignored), and `npx -p typescript tsc -p mod` type-checks it. Whichever Claude Code loaded the mod last writes them, so with an older version also installed, the types can lack newer parts of the API, such as the agent row.

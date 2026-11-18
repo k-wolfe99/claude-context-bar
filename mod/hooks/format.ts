@@ -103,3 +103,41 @@ export function cells(pct: number, width: number): { filled: number; empty: numb
 export function barWidth(raw: unknown): number {
   return typeof raw === 'number' && Number.isInteger(raw) && raw >= 1 && raw <= 200 ? raw : 24
 }
+
+// The agent panel's rows, as the engine's own row writes its timer and tokens.
+// Mirrors claude-agent-rows.py, the subagentStatusLine form.
+
+/** 45_000 -> 45s, 127_000 -> 2m 7s, 3_725_000 -> 1h 2m. */
+export function elapsed(ms: number): string {
+  const secs = Math.max(0, Math.floor(ms / 1000))
+  const h = Math.floor(secs / 3600)
+  const m = Math.floor((secs % 3600) / 60)
+  const s = secs % 60
+  if (h) return `${h}h ${m}m`
+  if (m) return `${m}m ${s}s`
+  return `${s}s`
+}
+
+/** 110_900 -> 110.9k, 12_000 -> 12.0k, 1_250_000 -> 1.2M: always a tenth, as the row writes it. */
+export function rowTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(n)
+}
+
+/**
+ * An agent's row: name, then text, then stats right-aligned in `columns`. The
+ * text is shortened first, and dropped if even a stub won't fit. With no width,
+ * the stats follow the text.
+ */
+export function agentRow(name: string, text: string, stats: string, columns?: number): string {
+  if (columns === undefined) return [name, text, stats].filter(Boolean).join('  ')
+  let left = name ? `${name}  ` : ''
+  const room = columns - left.length - stats.length - 2
+  if (text && room >= 4) {
+    left += text.length > room ? `${text.slice(0, room - 1).trimEnd()}…` : text
+  } else if (name) {
+    left = name
+  }
+  return left + ' '.repeat(Math.max(2, columns - left.length - stats.length)) + stats
+}

@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On, RenderPropsOf } from 'claude-code'
 
-import { cachePrices, countdown, fmtTokens, modelName } from '../hooks/format'
+import { agentRow, cachePrices, countdown, elapsed, fmtTokens, modelName, rowTokens } from '../hooks/format'
 
 const OPUS = 'claude-opus-5-5'
 const FIVE = { options: { cacheTtl: '5m' } }
@@ -13,7 +13,7 @@ const HINT = '? for shortcuts'
 const PROMPT_HINT: RenderPropsOf['PromptHint'] = { isDraft: false, isWorking: false, hint: HINT }
 
 const BAND: RenderPropsOf['AbovePrompt'] = {
-  hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120,
+  hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 120,
   scroll: { offset: 0, bodyRows: 10 }, view: {},
 }
 
@@ -126,6 +126,8 @@ function engine(on: On, { tokens = 44_800, world = { id: 'conv-a', files: {} } }
   // The engine draws nothing of its own in the band, and its hint line under the prompt.
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box' as const }))
   on('ui.render', { component: 'PromptHint' }, () => ({ type: 'Text' as const, children: [HINT] }))
+  // An agent's row: the engine's own columns, or the body a plugin passed down.
+  on('ui.render', { component: 'AgentRow' }, ($, e) => ({ type: 'Text' as const, children: [e.props.body ?? ENGINE_ROW] }))
   return clock
 }
 
@@ -552,6 +554,73 @@ describe('bar', () => {
   })
 })
 
+/** A subagent's row as the agent list asks for it: running for 2m 7s on Opus 5.5. */
+const AGENT: RenderPropsOf['AgentRow'] = {
+  id: 'a2f1', description: 'Final-review fix dispatch', type: 'general-purpose', status: 'running',
+  kind: 'local_agent', taskStatus: 'running', label: 'Committing porSpan clamp fix',
+  startTime: Date.UTC(2026, 9, 2, 14, 0) - 127_000, cwd: '/work/my repo', model: 'claude-opus-5-5[1m]',
+  contextWindowSize: 1_000_000, tokenCount: 110_900, tokenSamples: [110_900], hasRow: true,
+  rowIds: ['a2f1'], columns: 100, isHidden: false,
+}
+
+/** The engine's own row, standing for its columns; it draws `body` when one reaches it. */
+const ENGINE_ROW = 'engine row'
+
+/** Mounts one agent row through the mod and gives back what the row shows. */
+async function agentRowOf($: Engine, props: Partial<RenderPropsOf['AgentRow']> = {}, surface: 'terminal' | 'desktop' = 'terminal') {
+  const ui = await $.ui.mount({ plugin: 'context-bar', surface, component: 'AgentRow', props: { ...AGENT, ...props } })
+  return async () => flat(await ui.drawn())
+}
+
+describe('agent rows', () => {
+  test("a running subagent's row: type, what it is doing, then its model beside the timer and tokens", async ($, on) => {
+    engine(on)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    const row = await agentRowOf($)
+    const text = await row()
+    expect(text.startsWith('general-purpose  Committing porSpan clamp fix  ')).toBe(true)
+    expect(text.endsWith('Opus 5.5 · 2m 7s · ↓ 110.9k tokens')).toBe(true)
+    expect(text.length).toBe(100)
+  })
+
+  test('the timer runs on its own clock while the agent runs', async ($, on) => {
+    const clock = engine(on)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    const row = await agentRowOf($)
+    await row()
+    await clock.advance(3_000)
+    expect(await row()).toContain('Opus 5.5 · 2m 10s ·')
+  })
+
+  test('a finished subagent, or one with no model yet, keeps the engine\'s row', async ($, on) => {
+    engine(on)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    expect(await (await agentRowOf($, { status: 'completed', taskStatus: 'completed' }))()).toBe(ENGINE_ROW)
+    expect(await (await agentRowOf($, { model: undefined }))()).toBe(ENGINE_ROW)
+  })
+
+  test('a teammate waiting between turns keeps the engine\'s row', async ($, on) => {
+    engine(on)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    const row = await agentRowOf($, { kind: 'in_process_teammate', status: 'idle', taskStatus: 'running' })
+    expect(await row()).toBe(ENGINE_ROW)
+  })
+
+  test('a progress summary over several lines is drawn on one', async ($, on) => {
+    engine(on)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    const row = await agentRowOf($, { label: 'Reading files\n  then\tsumming up' })
+    expect(await row()).toContain('general-purpose  Reading files then summing up  ')
+  })
+
+  test('where the surface gives no width, the stats follow the label', async ($, on) => {
+    engine(on)
+    await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+    const row = await agentRowOf($, { columns: undefined }, 'desktop')
+    expect(await row()).toBe('general-purpose  Committing porSpan clamp fix  Opus 5.5 · 2m 7s · ↓ 110.9k tokens')
+  })
+})
+
 describe('format', () => {
   test('model names', () => {
     expect(modelName('claude-opus-5-5[1m]')).toBe('Opus 5.5')
@@ -580,6 +649,28 @@ describe('format', () => {
     expect(shown('claude-haiku-5-5', 100_000)).toEqual(['0.001', '0.020'])
     expect(shown('claude-haiku-5-5', 200_000)).toEqual(['0.010', '0.200'])
     expect(shown('claude-haiku-4-5', 200_000)).toEqual(['0.020', '0.400'])
+  })
+
+  test('agent rows: elapsed time and token counts as the engine\'s row writes them', () => {
+    expect(elapsed(45_000)).toBe('45s')
+    expect(elapsed(127_000)).toBe('2m 7s')
+    expect(elapsed(3_725_000)).toBe('1h 2m')
+    expect(elapsed(-5)).toBe('0s')
+    expect(rowTokens(0)).toBe('0')
+    expect(rowTokens(110_900)).toBe('110.9k')
+    expect(rowTokens(12_000)).toBe('12.0k')
+    expect(rowTokens(1_240_000)).toBe('1.2M')
+  })
+
+  test('agent rows: a long label is shortened to fit, and dropped where even a stub will not', () => {
+    const stats = 'Opus 5.5 · 2m 7s · ↓ 110.9k tokens'
+    const long = agentRow('general-purpose', 'x'.repeat(200), stats, 80)
+    expect(long.length).toBe(80)
+    expect(long).toContain('…')
+    expect(long.endsWith(stats)).toBe(true)
+    const narrow = agentRow('general-purpose', 'Committing porSpan clamp fix', stats, 50)
+    expect(narrow).not.toContain('Committing')
+    expect(narrow.startsWith('general-purpose')).toBe(true)
   })
 
   test('countdowns round up, so 0:00 only shows once lapsed', () => {

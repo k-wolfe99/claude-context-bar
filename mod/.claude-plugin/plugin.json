@@ -1,6 +1,6 @@
 {
   "name": "context-bar",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": { "name": "Kyle Wolfe" },
   "description": "Context window bar and a live prompt-cache countdown under the prompt",
   "types": "./types/index.d.ts",
