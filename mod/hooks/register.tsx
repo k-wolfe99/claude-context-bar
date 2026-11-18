@@ -4,11 +4,16 @@ import type { Elements, EngineInterface, Register } from 'claude-code'
 import type { Snapshot } from '../types'
 import {
   DIM, EMPTY, GREEN, RED,
-  barWidth, cachePrices, cells, countdown, fmtTokens, gradient, modelName,
+  agentRow, barWidth, cachePrices, cells, countdown, elapsed, fmtTokens, gradient, modelName, rowTokens,
 } from './format'
 
 const snap = atom({ plugin: 'context-bar', key: 'snap' } as const, null)
 const now = atom({ plugin: 'context-bar', key: 'now' } as const, 0)
+/** The agent rows' clock: ticks only while a row this mod draws is running. */
+const agentNow = atom({ plugin: 'context-bar', key: 'agentNow' } as const, 0)
+
+/** The agent rows this mod draws now, so the clock ticks only while there are some. */
+const runningRows = new Set<string>()
 
 /** Where each conversation's transcript was found, by session id. */
 const transcripts = new Map<string, string>()
@@ -217,6 +222,7 @@ export const register: Register = (on, options) => {
     await update($, now, () => started)
     $.clock.every(1000, async () => {
       const t = await $.clock.now()
+      if (runningRows.size > 0) await update($, agentNow, () => t)
       const id = await $.session.id()
       if (id !== sessionId) {
         sessionId = id
@@ -311,6 +317,25 @@ export const register: Register = (on, options) => {
     const t = await read($, now)
     const { Box, Text } = $.ui.resolve(e)
     return line({ Box, Text }, s, t)
+  })
+
+  // The agent panel's rows: the engine's own (type, what it is doing, timer,
+  // tokens) with the model added beside the timer. Only a running agent with a
+  // model is drawn: a finished row has no end time to stop its timer at, so it
+  // keeps the engine's. The row is asked again as its props change and every
+  // five seconds; the clock's atom redraws it each second so the timer runs.
+  on('ui.render', { component: 'AgentRow' }, async ($, e, next) => {
+    const p = e.props
+    for (const id of runningRows) if (!p.rowIds.includes(id)) runningRows.delete(id)
+    if (p.isHidden || p.status !== 'running' || !p.model) {
+      runningRows.delete(p.id)
+      return next(e)
+    }
+    runningRows.add(p.id)
+    const t = Math.max(await read($, agentNow), await $.clock.now())
+    const stats = [modelName(p.model), elapsed(t - p.startTime), `↓ ${rowTokens(p.tokenCount)} tokens`].join(' · ')
+    const text = p.label.replace(/\s+/g, ' ').trim()
+    return next({ ...e, props: { ...p, body: agentRow(p.type, text, stats, p.columns) } })
   })
 
   /**
